@@ -1,0 +1,115 @@
+<?php
+/**
+ * @name BabelOnContextDuplicate
+ * @description Handles resources translations links on context duplication with Babel
+ * @author Manuel Barbiero 2019
+ * @PluginEvents OnContextSave
+ * 
+ * Extends: Babel
+ */
+ 
+ $babel = $modx->getService('babel', 'Babel', $modx->getOption('babel.core_path', null, $modx->getOption('core_path').'components/babel/').'model/babel/');
+
+// be sure babel TV is loaded
+if (!($babel instanceof Babel) || !$babel->babelTv) return;
+    
+switch($modx->event->name) {
+    
+    case 'OnContextSave':
+        // Get new context params
+        $newContext = & $modx->event->params['context'];
+        $newContextkey = $context->get('key');
+		$mode = $modx->event->params['mode'];
+        
+        // Check for new context
+        if($mode == 'new') {
+            // Get current value of babel context keys setting
+            $currentBabelContexts = $modx->getOption('babel.contextKeys'); 
+            // Query to add value of new context to enable Babel
+            $settingContext = $modx->getObject('modSystemSetting', 'babel.contextKeys');
+            $settingContext->set('value', $currentBabelContexts.','.$newContextkey);
+            $settingContext->save();
+            // Query to set contextKey as cultureKey for duplicated context
+            $settingCultureKey = $modx->newObject('modContextSetting');
+            $settingCultureKey->set('context_key', $newContextkey);
+            $settingCultureKey->set('key', 'cultureKey');
+            $settingCultureKey->set('value', $newContextkey);
+            $settingCultureKey->set('xtype', 'textfield');
+            $settingCultureKey->save();
+            // Clear cache for system and context settings
+            $cacheRefreshOptions =  array( 
+                'system_settings' => array(),
+                'context_settings' => array()
+            );
+            $modx->cacheManager->refresh($cacheRefreshOptions);
+
+		}
+
+    break;
+
+	case 'OnContextFormRender':
+
+		// Get new context params
+        $newContext = $modx->event->params['context'];
+        $newContextkey = $modx->event->params['key'];
+		$mode = $modx->event->params['mode'];
+
+		$modx->log(modX::LOG_LEVEL_ERROR, 'BabelOnContextDuplicate: Context mode '. $mode);
+		
+		// Get all contexts exept mgr and new context
+		$contexts = $modx->getCollection('modContext', array('key:NOT IN' => array('mgr', $newContextkey)));
+		foreach ($contexts as $context) {
+
+			// Query to get all resources of each context
+			$q = $modx->newQuery('modResource');
+			$q->select(array('id', 'alias'));
+			$q->where(array('context_key' => $context->get('key')));
+			$resources = $modx->getCollection('modResource',$q);
+
+			// Loop through all context resources
+			foreach($resources as $resource){
+			  
+			  $linkedResources = $babel->getLinkedResources($resource->get('id'));
+
+			  // Check if context contains linked resources from new context, if it does then stop the whole process
+			  if (array_key_exists($newContextkey, $linkedResources)) {
+				  $modx->log(modX::LOG_LEVEL_ERROR, 'BabelOnContextDuplicate: "'.$context->get('key').'" context already contains linked resources from "'.$newContextkey.'" context.');
+				  return;
+			  }
+
+			  // Check if Babel TV has been initiated for the specified resource 
+			  if (empty($linkedResources)) {
+				$babel->initBabelTv($resource);
+			  }
+			  
+			  // Get resource alias for reference the same in new context
+			  $alias = $resource->get('alias');
+			  
+			  // Query to get resource with the same alias from new context
+			  $criteria = array(
+				'alias' => $alias,
+				'context_key' => $newContextkey
+			  );
+			  $qNew = $modx->newQuery('modResource', $criteria);
+			  $qNew->select('id');
+			  $newResourceID = $modx->getValue($qNew->prepare());
+			  
+			  // Query to update babel tv value of each resource in context
+			  $babelTvID = $babel->babelTv->get('id');
+			  $resourceBabelTv = $modx->getObject('modTemplateVar', $babelTvID);
+			  $resourceBabelTvValue = $resourceBabelTv->getValue($resource->get('id'));
+			  $resourceBabelTv->setValue($resource->get('id'), $resourceBabelTvValue.';'.$newContextkey.':'.$newResourceID);
+			  $resourceBabelTv->save();
+			  // Clear whole modx cache
+			  $modx->cacheManager->refresh();
+			  
+			  // Re-sync resources of other contexts
+			  $babel->synchronizeTvs($resource->get('id'));
+			}
+
+		}
+
+
+	break;
+    
+}
