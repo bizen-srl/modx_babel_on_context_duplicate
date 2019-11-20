@@ -3,7 +3,7 @@
  * @name BabelOnContextDuplicate
  * @description Handles resources translations links on context duplication with Babel
  * @author Manuel Barbiero 2019
- * @PluginEvents OnContextSave
+ * @PluginEvents OnContextSave,OnContextFormRender
  * 
  * Extends: Babel
  */
